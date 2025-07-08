@@ -1,0 +1,10 @@
+name = "bank"
+version = "0.1.0"
+defaultTargets = ["bank"]
+
+[[lean_lib]]
+name = "Bank"
+
+[[lean_exe]]
+name = "bank"
+root = "Main"
