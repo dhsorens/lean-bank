@@ -22,8 +22,6 @@ theorem vault_deposit_correct : ∀ id qty v_prev v_next,
   simp
   rw [rbmap_insert_find]
 
-#check ite
-
 -- WITHDRAWALS
 theorem vault_withdraw_correct : ∀ id qty v_prev v_next,
   -- a successful withdrawal
@@ -197,14 +195,8 @@ theorem vault_destroy_fail_nonzero : ∀ id bal v_prev,
     rw [h_b]
     assumption
 
-
--- TODO transfer does not change total balance
-
-
-
 -- INVARIANTS
 -- To write invariants, we need a formalization of the vault's trace.
-
 -- step
 inductive vault_step v_prev v_next
 | deposit_step id qty :
@@ -220,11 +212,11 @@ inductive vault_step v_prev v_next
   acct_destroy id v_prev = Except.ok v_next →
   vault_step v_prev v_next
 
--- trace
-inductive vault_trace : Vault → Vault → Prop
-| clnil : ∀ x,
+-- Put the trace in `Type` so we can eliminate into data (e.g., define functions like sums)
+inductive vault_trace : Vault → Vault → Type
+| clnil x :
     vault_trace x x
-| snoc : ∀ frm mid to,
+| snoc frm mid to :
     vault_trace frm mid →
     vault_step  mid to →
     vault_trace frm to
@@ -233,5 +225,112 @@ inductive vault_trace : Vault → Vault → Prop
 def reachable_vault (v : Vault) : Prop :=
   ∃ (_ : vault_trace init_vault v), True
 
--- INVARIANTS
+-- first some auxiliary functions
+def step_deposit_amt v_mid v_to (acct : Nat)
+  (step : vault_step v_mid v_to) : Nat :=
+  match step with
+  | vault_step.deposit_step id qty _ => if id = acct then qty else 0
+  | _ => 0
+
+def vault_trace_deposits (acct : Nat) v_frm v_to
+  (t : vault_trace v_frm v_to) : Nat :=
+  match t with
+  | .clnil _ => 0
+  | .snoc _ mid _ t' step =>
+      vault_trace_deposits acct _ mid t' +
+        step_deposit_amt mid _ acct step
+
+def step_withdrawal_amt v_mid v_to (acct : Nat)
+  (step : vault_step v_mid v_to) : Nat :=
+  match step with
+  | vault_step.withdraw_step id qty _ =>
+    if id = acct then qty else 0
+  | _ => 0
+
+def vault_trace_withdrawals (acct : Nat) v_frm v_to
+  (t : vault_trace v_frm v_to) : Nat :=
+  match t with
+  | .clnil _ => 0
+  | .snoc _ mid _ t' step =>
+    vault_trace_withdrawals acct _ mid t' +
+      step_withdrawal_amt mid _ acct step
+
+-- now some lemmas
+theorem vault_safety_lemma : ∀ acct v_from v_mid v_to
+  (t : vault_trace v_from v_mid)
+  (step : vault_step v_mid v_to),
+  query_balance acct v_to =
+    query_balance acct v_mid +
+    step_deposit_amt v_mid v_to acct step -
+    step_withdrawal_amt v_mid v_to acct step := by
+  intro acct v_from v_mid v_to trace step
+  induction trace
+  case clnil _ =>
+
+    sorry
+  case snoc mid to trace' step ih => sorry
+
+-- vault trace deposits can be decomposed in terms of the trace
+theorem vault_safety_deposit_lemma : ∀ acct v_frm v_mid v_to
+  (t : vault_trace v_frm v_mid)
+  (step : vault_step v_mid v_to),
+  vault_trace_deposits acct v_frm v_to (.snoc v_frm v_mid v_to t step) =
+  vault_trace_deposits acct v_frm v_mid t +
+    step_deposit_amt v_mid v_to acct step := by
+  intros acct v_frm v_mid v_to t step
+  -- challenge: simplify only the left-hand side of this equality
+  generalize hh : vault_trace_deposits acct v_frm v_to (vault_trace.snoc v_frm v_mid v_to t step) = hₓ
+  unfold vault_trace_deposits at hh
+  rw [← hh]
+
+theorem vault_safety_withdrawals_lemma : ∀ acct v_frm v_mid v_to
+  (t : vault_trace v_frm v_mid)
+  (step : vault_step v_mid v_to),
+  vault_trace_withdrawals acct v_frm v_to (.snoc v_frm v_mid v_to t step) =
+  vault_trace_withdrawals acct v_frm v_mid t +
+    step_withdrawal_amt v_mid v_to acct step := by
+  intros acct v_frm v_mid v_to t step
+  -- challenge: simplify only the left-hand side of this equality
+  generalize hh : vault_trace_withdrawals acct v_frm v_to (vault_trace.snoc v_frm v_mid v_to t step) = hₓ
+  unfold vault_trace_withdrawals at hh
+  rw [← hh]
+
+theorem vault_safety_trace_lemma : ∀ acct v_frm v_to
+  (t : vault_trace v_frm v_to),
+  vault_trace_withdrawals acct v_frm v_to t ≤
+  vault_trace_deposits acct v_frm v_to t := by
+  intros acct v_frm v_to trace
+  induction trace
+  case clnil =>
+    unfold vault_trace_deposits vault_trace_withdrawals
+    sorry
+  case snoc mid to trace' step ih =>
+    sorry
+
+
 -- invariant: balance equals deposits + transfers_to - withdraws - transfers_from
+theorem vault_safety : ∀ acct v (t : vault_trace init_vault v),
+  query_balance acct v =
+    vault_trace_deposits acct init_vault v t -
+    vault_trace_withdrawals acct init_vault v t := by
+  intro acct vault trace
+  induction trace
+  case clnil =>
+    unfold query_balance init_vault vault_trace_deposits vault_trace_withdrawals
+    simp
+  case snoc mid to trace' step ih =>
+    rw [vault_safety_lemma acct init_vault mid to trace' step]
+    rw [ih]; clear ih
+    rw [vault_safety_deposit_lemma, vault_safety_withdrawals_lemma]
+    -- goal is now: x - y + x' - y' = x + x' - (y + y')
+    have h₁ :
+      vault_trace_withdrawals acct init_vault mid trace' ≤
+      vault_trace_deposits acct init_vault mid trace' := by
+      apply vault_safety_trace_lemma
+    generalize hx  : vault_trace_deposits acct init_vault mid trace' = x at h₁
+    generalize hy  : vault_trace_withdrawals acct init_vault mid trace' = y at h₁
+    generalize hx' : step_deposit_amt mid to acct step = x'
+    generalize hy' : step_withdrawal_amt mid to acct step = y'
+    --
+    rw [Nat.sub_add_eq]
+    exact congrFun (congrArg HSub.hSub ((sub_comm x y x') h₁)) y'
